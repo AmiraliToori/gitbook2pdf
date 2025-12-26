@@ -1,29 +1,60 @@
-<!--
- * @Author: robert zhang <robertzhangwenjie@gmail.com>
- * @Date: 2022-11-12 12:05:59
- * @LastEditTime: 2023-02-27 22:05:44
- * @LastEditors: robert zhang
- * @Description: 
--->
-# Gitbook2Pdf 
-## This project has solved the image display problem   
-- 原因分析  
-  当页面图片的地址为相对地址时，因为拼接的baseUrl为传入的url，因此当gitbook存在多个子章节时，子章节中的img url拼接错误  
-- 解决方案  
-  再爬取每个章节的内容后，将内容中的所有img标签中的属性scr进行替换，使用urllib.parse.urljoin替换为当前章节的所有img属性src的值
+# Gitbook2Pdf
 
+A Python tool to convert GitBook websites into a single PDF file.
 
-## Usage 
+## Features
+
+- **Solves Image Display Issues**: Handles relative image paths correctly, even in sub-chapters, ensuring all images render properly in the final PDF.
+- **Modern GitBook Support**: Updated to work with the latest GitBook layouts (Next.js based) as well as legacy versions.
+- **Full Content Generation**: Crawls and generates a complete PDF including all chapters found in the table of contents.
+
+## How it works
+
+1.  **Crawling**: The script starts from the provided GitBook URL and extracts the Table of Contents.
+2.  **Scraping**: It iterates through each chapter link, fetching the content.
+3.  **Image Fixing**: It dynamically fixes relative image URLs within each chapter to ensure they point to the correct absolute location.
+4.  **PDF Generation**: It uses `WeasyPrint` to compile the collected HTML content into a PDF document.
+
+## Installation
+
+1.  Clone the repository.
+2.  Install the dependencies using pip:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    *Note: You may need to install system dependencies for `WeasyPrint` (e.g., `libpango1.0-dev`, `libcairo2-dev`) depending on your OS.*
+
+## Usage
+
+### With Python
+
+Run the script providing the GitBook URL and the desired output filename:
+
+```bash
+python3 gitbook.py <url> <filename.pdf>
+```
+
+**Example:**
+
+```bash
+python3 gitbook.py https://borosan.gitbook.io/lpic1-exam-guide lpic1-guide.pdf
+```
+
 ### With Docker
-```shell
+
+You can also run it using Docker to avoid installing local dependencies:
+
+```bash
 docker run -it -v `pwd`/output:/app/output zhangwenjie/gitbook2pdf <your url> <filename.pdf>
 ```
 
-### With python
-```shell
-pip install -r requirements.txt
-python gitbook.py <url> <filename.pdf>
-```
+## Credits & AI Contribution
+
+This repository is maintained with the help of AI.
+Significant modifications and modernizations (including Python 3.12 support and new GitBook layout compatibility) were performed with the help of **Jules (Gemini 3 Pro)**.
 
 ## Original Project
-[original project url](https://github.com/fuergaosi233/gitbook2pdf)
+
+Based on [gitbook2pdf](https://github.com/fuergaosi233/gitbook2pdf).

@@ -7,6 +7,8 @@ Description:
 '''
 import html
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import asyncio
 import aiohttp
 import weasyprint
@@ -32,7 +34,9 @@ def custom_url_fetcher(url, timeout=60, ssl_context=None):
     if url.startswith("http"):
         try:
             response = requests.get(url, timeout=timeout, headers={
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
             })
             response.raise_for_status()
 
@@ -273,7 +277,9 @@ class Gitbook2PDF():
         self.fname = fname
         self.base_url = base_url
         self.headers = {
-            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
         }
         self.content_list = []
         self.meta_list = []
@@ -373,7 +379,12 @@ class Gitbook2PDF():
             title
         }]}
         '''
-        response = requests.get(start_url, headers=self.headers)
+        session = requests.Session()
+        retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+        session.mount('http://', HTTPAdapter(max_retries=retries))
+        session.mount('https://', HTTPAdapter(max_retries=retries))
+
+        response = session.get(start_url, headers=self.headers)
         self.base_url = response.url
         start_url = response.url
         text = response.text

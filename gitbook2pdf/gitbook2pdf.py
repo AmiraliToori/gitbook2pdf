@@ -17,6 +17,13 @@ from urllib.parse import urljoin, urlparse
 from lxml import etree as ET
 import sys
 import os
+import logging
+
+# Configure logging for WeasyPrint
+logger = logging.getLogger('weasyprint')
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.INFO)
+
 BASE_DIR = os.path.dirname(__file__)
 
 async def request(url, headers, timeout=None):
@@ -111,12 +118,29 @@ class ChapterParser():
 
     def parser(self):
         tree = ET.HTML(self.original)
-        if tree.xpath('//section[@class="normal markdown-section"]'):
-            context = tree.xpath('//section[@class="normal markdown-section"]')[0]
+        context = None
+        # Try finding the main content
+        main_content = tree.xpath('//main')
+        if main_content:
+            context = main_content[0]
         else:
-            context = tree.xpath('//section[@class="normal"]')[0]
+            # Fallback for old structure
+            if tree.xpath('//section[@class="normal markdown-section"]'):
+                context = tree.xpath('//section[@class="normal markdown-section"]')[0]
+            elif tree.xpath('//section[@class="normal"]'):
+                context = tree.xpath('//section[@class="normal"]')[0]
+
+        if context is None:
+            return ""
+
         if context.find('footer'):
             context.remove(context.find('footer'))
+
+        # Add markdown-section class for gitbook.css compatibility
+        existing_class = context.get('class', '')
+        if 'markdown-section' not in existing_class:
+            context.set('class', existing_class + ' markdown-section')
+
         # 解析
         context = self.parse_img(context)
         # 解析head
@@ -128,8 +152,9 @@ class ChapterParser():
         el_imgs = context.xpath('//img')
         for el_img in el_imgs:
             old_src = el_img.get('src')
-            new_src = urljoin(self.base_url,old_src)
-            el_img.set('src',new_src)
+            if old_src:
+                new_src = urljoin(self.base_url,old_src)
+                el_img.set('src',new_src)
         return context
 
     def parsehead(self, context):
@@ -137,33 +162,22 @@ class ChapterParser():
             return 'level' + str(num)
         for head in self.heads:
             if context.xpath(head):
-                self.head = IndexParser.titleparse(context.xpath(head)[0])
-                if self.head in self.index_title:
-                    context.xpath(head)[0].text = self.index_title
                 context.xpath(head)[0].attrib['class'] = level(self.baselevel)
                 break
         return context
 
 
 class IndexParser():
-    def __init__(self, lis, start_url):
-        self.lis = lis
+    def __init__(self, elements, start_url):
+        self.elements = elements
         self.start_url = start_url
 
     @classmethod
-    def titleparse(cls, li):
+    def titleparse(cls, element):
         '''
-        description: 从li标签中提取出text作为title
-        return {title}
+        description: Extract text from element
         '''        
-        children = li.getchildren()
-        if len(children) != 0:
-            firstchildren = children[0]
-            primeval_title = ''.join(firstchildren.itertext())
-            title = ' '.join(primeval_title.split())
-        else:
-            title = li.text
-        return title
+        return "".join(element.itertext()).strip()
 
     def parse(self):
         '''
@@ -176,48 +190,65 @@ class IndexParser():
         '''        
         found_urls = []
         content_urls = []
-        for li in self.lis:
-            element_class = li.attrib.get('class')
-            if not element_class:
-                continue
-            # 解析章节中的title和level
-            if 'header' in element_class:
-                title = self.titleparse(li)
-                data_level = li.attrib.get('data-level')
-                level = len(data_level.split('.')) if data_level else 1
-                content_urls.append({
-                    'url': "",
-                    'level': level,
-                    'title': title
-                })
-            elif "chapter" in element_class:
-                data_level = li.attrib.get('data-level')
-                level = len(data_level.split('.'))
-                if 'data-path' in li.attrib:
-                    data_path = li.attrib.get('data-path')
-                    # url 为子章节的访问地址
-                    url = urljoin(self.start_url, data_path)
-                    # 解析子章节中的title
-                    title = self.titleparse(li)
-                    # 将url、level、title 放入content_urls中
-                    if url not in found_urls:
-                        content_urls.append(
-                            {
-                                'url': url,
-                                'level': level,
-                                'title': title
-                            }
-                        )
-                        found_urls.append(url)
 
-                # Unclickable link
-                else:
+        for element in self.elements:
+            # Check if it's an 'a' tag (new structure) or 'li' (old structure)
+            if element.tag == 'a':
+                href = element.get('href')
+                title = self.titleparse(element)
+                if href:
+                    url = urljoin(self.start_url, href)
+                    if url not in found_urls:
+                        content_urls.append({
+                            'url': url,
+                            'level': 1, # Flat structure assumption
+                            'title': title
+                        })
+                        found_urls.append(url)
+            else:
+                # Old logic for 'li'
+                li = element
+                element_class = li.attrib.get('class')
+                if not element_class:
+                    continue
+                # 解析章节中的title和level
+                if 'header' in element_class:
                     title = self.titleparse(li)
+                    data_level = li.attrib.get('data-level')
+                    level = len(data_level.split('.')) if data_level else 1
                     content_urls.append({
                         'url': "",
                         'level': level,
                         'title': title
                     })
+                elif "chapter" in element_class:
+                    data_level = li.attrib.get('data-level')
+                    level = len(data_level.split('.'))
+                    if 'data-path' in li.attrib:
+                        data_path = li.attrib.get('data-path')
+                        # url 为子章节的访问地址
+                        url = urljoin(self.start_url, data_path)
+                        # 解析子章节中的title
+                        title = self.titleparse(li)
+                        # 将url、level、title 放入content_urls中
+                        if url not in found_urls:
+                            content_urls.append(
+                                {
+                                    'url': url,
+                                    'level': level,
+                                    'title': title
+                                }
+                            )
+                            found_urls.append(url)
+
+                    # Unclickable link
+                    else:
+                        title = self.titleparse(li)
+                        content_urls.append({
+                            'url': "",
+                            'level': level,
+                            'title': title
+                        })
         return content_urls
 
 
@@ -239,7 +270,8 @@ class Gitbook2PDF():
         content_urls = self.collect_urls_and_metadata(self.base_url)
         # 初始化一个长度为len(content_urls)的list，使用""填充长度
         self.content_list = ["" for _ in range(len(content_urls))]
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         loop.run_until_complete(self.crawl_main_content(content_urls))
         loop.close()
 
@@ -263,7 +295,8 @@ class Gitbook2PDF():
                 tasks.append(self.gettext(index, urlobj['url'], urlobj['level'],urlobj['title']))
             else:
                 tasks.append(self.getext_fake(index, urlobj['title'], urlobj['level']))
-        await asyncio.gather(*tasks)
+        if tasks:
+            await asyncio.gather(*tasks)
         print("crawl : all done!")
 
     async def getext_fake(self, index, title, level):
@@ -283,17 +316,26 @@ class Gitbook2PDF():
             metatext = await request(url, self.headers, timeout=10)
         except Exception as e:
             print("retrying : ", url)
-            metatext = await request(url, self.headers)
+            try:
+                metatext = await request(url, self.headers)
+            except Exception as e:
+                print(f"failed to fetch {url}: {e}")
+                return
+
         try:
             text = ChapterParser(url,metatext, title, level ).parser()
             print("done : ", url)
             self.content_list[index] = text
         except IndexError:
             print('faild at : ', url, ' maybe content is empty?')
+        except Exception as e:
+             print(f"failed to parse {url}: {e}")
 
     def write_pdf(self, fname, html_text, css_text):
         tmphtml = weasyprint.HTML(string=html_text)
         tmpcss = weasyprint.CSS(string=css_text)
+        if not os.path.exists("./output/"):
+            os.makedirs("./output/")
         fname = "./output/" + fname
         htmlname = fname.replace('.pdf', '.html')
         with open(htmlname, 'w', encoding='utf-8') as f:
@@ -355,6 +397,15 @@ class Gitbook2PDF():
         now = datetime.datetime.utcnow().replace(microsecond=0).isoformat()
         self.meta_list.append(('dcterms.created', now))
         self.meta_list.append(('dcterms.modified', now))
-        lis = ET.HTML(text).xpath("//ul[@class='summary']//li")
-        return IndexParser(lis, start_url).parse()
 
+        tree = ET.HTML(text)
+
+        # Try new structure
+        aside = tree.xpath("//aside[@data-testid='table-of-contents']")
+        if aside:
+            links = aside[0].xpath(".//a")
+            return IndexParser(links, start_url).parse()
+        else:
+            # Try old structure
+            lis = tree.xpath("//ul[@class='summary']//li")
+            return IndexParser(lis, start_url).parse()

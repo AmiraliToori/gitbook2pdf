@@ -26,12 +26,6 @@ logger.setLevel(logging.INFO)
 
 BASE_DIR = os.path.dirname(__file__)
 
-async def request(url, headers, timeout=None):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, timeout=timeout) as resp:
-            return await resp.text()
-
-
 def local_ua_stylesheets(self):
     return [weasyprint.CSS(os.path.join(BASE_DIR, './libs/html5_ua.css'))]
 
@@ -288,15 +282,17 @@ class Gitbook2PDF():
         self.write_pdf(self.fname, html_text, css_text)
 
     async def crawl_main_content(self, content_urls):
-        tasks = []
-        for index, urlobj in enumerate(content_urls):
-            # 当urljob中的url不为空时，则表示为子章节，则开始爬取内容
-            if urlobj['url']:
-                tasks.append(self.gettext(index, urlobj['url'], urlobj['level'],urlobj['title']))
-            else:
-                tasks.append(self.getext_fake(index, urlobj['title'], urlobj['level']))
-        if tasks:
-            await asyncio.gather(*tasks)
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            semaphore = asyncio.Semaphore(10)
+            for index, urlobj in enumerate(content_urls):
+                # 当urljob中的url不为空时，则表示为子章节，则开始爬取内容
+                if urlobj['url']:
+                    tasks.append(self.gettext(session, semaphore, index, urlobj['url'], urlobj['level'],urlobj['title']))
+                else:
+                    tasks.append(self.getext_fake(index, urlobj['title'], urlobj['level']))
+            if tasks:
+                await asyncio.gather(*tasks)
         print("crawl : all done!")
 
     async def getext_fake(self, index, title, level):
@@ -305,22 +301,24 @@ class Gitbook2PDF():
         string = f"<h1 class='{class_}'>{title}</h1>"
         self.content_list[index] = string
 
-    async def gettext(self, index, url, level, title):
+    async def gettext(self, session, semaphore, index, url, level, title):
         '''
         description: 爬取url中的内容
         return path's html
         '''
-
-        print("crawling : ", url)
-        try:
-            metatext = await request(url, self.headers, timeout=10)
-        except Exception as e:
-            print("retrying : ", url)
+        async with semaphore:
+            print("crawling : ", url)
             try:
-                metatext = await request(url, self.headers)
+                async with session.get(url, headers=self.headers, timeout=10) as resp:
+                    metatext = await resp.text()
             except Exception as e:
-                print(f"failed to fetch {url}: {e}")
-                return
+                print("retrying : ", url)
+                try:
+                    async with session.get(url, headers=self.headers, timeout=20) as resp:
+                        metatext = await resp.text()
+                except Exception as e:
+                    print(f"failed to fetch {url}: {e}")
+                    return
 
         try:
             text = ChapterParser(url,metatext, title, level ).parser()

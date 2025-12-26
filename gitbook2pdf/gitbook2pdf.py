@@ -165,8 +165,6 @@ class ChapterParser():
             context.remove(context.find('footer'))
 
         # Additional cleaning for specific elements (Next button, Last updated, Was this helpful)
-        # Based on observation, these are often in divs at the end of the content.
-        # We can try to identify them by text content if classes are dynamic or generic.
 
         # Remove elements containing "Was this helpful?"
         for element in context.xpath('.//*[contains(text(), "Was this helpful?")]/ancestor::div[1]'):
@@ -177,16 +175,7 @@ class ChapterParser():
              element.getparent().remove(element)
 
         # Remove "Next" navigation
-        # This is tricky because "Next" might be legitimate text.
-        # But usually it's a link at the bottom.
-        # Looking at debug output: Child: div, Class: ['flex', 'flex-col', 'md:flex-row', 'mt-6', 'gap-2', 'max-w-3xl', 'page-width-wide:max-w-screen-2xl', 'mx-auto', 'text-tint'], Text start: Next101.1
-        # It seems to be a div with 'mt-6' and 'gap-2' containing a link that starts with Next.
-        # Or we can just look for the last div if it matches this pattern.
-        # Let's try to remove the last few divs if they look suspicious.
-
-        # A safer approach for "Next" button which is often an 'a' tag inside a div
-        # <div class="..."> <a ...> <div ...> Next ... </div> </a> </div>
-        # Use xpath to find the container
+        # Use xpath to find the container with specific classes often used for navigation
         next_navs = context.xpath('.//div[contains(@class, "mt-6") and contains(@class, "gap-2")]')
         for nav in next_navs:
              if "Next" in "".join(nav.itertext()) or "Previous" in "".join(nav.itertext()):
@@ -379,7 +368,10 @@ class Gitbook2PDF():
 
         # Convert markdown back to HTML
         # We need extensions to support tables, code blocks, etc.
-        html_body = markdown.markdown(full_markdown, extensions=['extra', 'codehilite', 'toc'])
+        html_body_content = markdown.markdown(full_markdown, extensions=['extra', 'codehilite', 'toc'])
+
+        # Wrap in markdown-section div to ensure gitbook.css styles are applied
+        html_body = f'<div class="markdown-section">{html_body_content}</div>'
 
         # Wrap in HTML structure
         html_g = HtmlGenerator(self.base_url)

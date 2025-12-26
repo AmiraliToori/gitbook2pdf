@@ -18,6 +18,8 @@ from lxml import etree as ET
 import sys
 import os
 import logging
+from weasyprint import default_url_fetcher
+from weasyprint.urls import URLFetchingError
 
 # Configure logging for WeasyPrint
 logger = logging.getLogger('weasyprint')
@@ -25,6 +27,26 @@ logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
 
 BASE_DIR = os.path.dirname(__file__)
+
+def custom_url_fetcher(url, timeout=60, ssl_context=None):
+    if url.startswith("http"):
+        try:
+            response = requests.get(url, timeout=timeout, headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36'
+            })
+            response.raise_for_status()
+
+            return {
+                'string': response.content,
+                'mime_type': response.headers.get('Content-Type'),
+                'encoding': response.encoding,
+                'redirected_url': response.url,
+            }
+        except Exception as e:
+            logger.error(f"Custom fetcher failed for {url}: {e}")
+            raise URLFetchingError(str(e))
+    else:
+        return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)
 
 def local_ua_stylesheets(self):
     return [weasyprint.CSS(os.path.join(BASE_DIR, './libs/html5_ua.css'))]
@@ -330,7 +352,7 @@ class Gitbook2PDF():
              print(f"failed to parse {url}: {e}")
 
     def write_pdf(self, fname, html_text, css_text):
-        tmphtml = weasyprint.HTML(string=html_text)
+        tmphtml = weasyprint.HTML(string=html_text, url_fetcher=custom_url_fetcher)
         tmpcss = weasyprint.CSS(string=css_text)
         if not os.path.exists("./output/"):
             os.makedirs("./output/")

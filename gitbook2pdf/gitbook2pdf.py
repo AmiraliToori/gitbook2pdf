@@ -22,6 +22,8 @@ import os
 import logging
 from weasyprint import default_url_fetcher
 from weasyprint.urls import URLFetchingError
+from markdownify import markdownify as md
+import markdown
 
 # Configure logging for WeasyPrint
 logger = logging.getLogger('weasyprint')
@@ -162,6 +164,24 @@ class ChapterParser():
         if context.find('footer'):
             context.remove(context.find('footer'))
 
+        # Additional cleaning for specific elements (Next button, Last updated, Was this helpful)
+
+        # Remove elements containing "Was this helpful?"
+        for element in context.xpath('.//*[contains(text(), "Was this helpful?")]/ancestor::div[1]'):
+             element.getparent().remove(element)
+
+        # Remove "Last updated"
+        for element in context.xpath('.//*[contains(text(), "Last updated")]/ancestor::div[1]'):
+             element.getparent().remove(element)
+
+        # Remove "Next" navigation
+        # Use xpath to find the container with specific classes often used for navigation
+        next_navs = context.xpath('.//div[contains(@class, "mt-6") and contains(@class, "gap-2")]')
+        for nav in next_navs:
+             if "Next" in "".join(nav.itertext()) or "Previous" in "".join(nav.itertext()):
+                 nav.getparent().remove(nav)
+
+
         # Add markdown-section class for gitbook.css compatibility
         existing_class = context.get('class', '')
         if 'markdown-section' not in existing_class:
@@ -171,8 +191,21 @@ class ChapterParser():
         context = self.parse_img(context)
         # 解析head
         context = self.parsehead(context)
-        # 返回html格式的内容
-        return html.unescape(ET.tostring(context,encoding='utf-8').decode())
+
+        # Convert to string and then to markdown
+        html_content = html.unescape(ET.tostring(context, encoding='utf-8').decode())
+
+        # Convert to Markdown
+        md_content = md(html_content, heading_style="ATX")
+
+        # Post-processing markdown to remove extra newlines or artifacts
+        md_content = re.sub(r'\n{3,}', '\n\n', md_content)
+
+        # Ensure title is present if not
+        if f"# {self.index_title}" not in md_content:
+             md_content = f"# {self.index_title}\n\n{md_content}"
+
+        return md_content
 
     def parse_img(self,context):
         el_imgs = context.xpath('//img')
@@ -188,6 +221,7 @@ class ChapterParser():
             return 'level' + str(num)
         for head in self.heads:
             if context.xpath(head):
+                # We don't need to add class for markdown conversion but we can keep it
                 context.xpath(head)[0].attrib['class'] = level(self.baselevel)
                 break
         return context
@@ -303,11 +337,45 @@ class Gitbook2PDF():
         loop.run_until_complete(self.crawl_main_content(content_urls))
         loop.close()
 
-        # main body
-        body = "".join(self.content_list)
-        # 使用HtmlGenerator类来生成HTML
+        # Check and create output directories
+        output_dir = "./output/"
+        md_dir = os.path.join(output_dir, "markdown")
+        if not os.path.exists(md_dir):
+            os.makedirs(md_dir)
+
+        # Save individual markdown files
+        for i, content in enumerate(self.content_list):
+            # Try to get title from content (it should be the first line # Title)
+            # or use index
+            title = f"page_{i}"
+            if content.startswith("#"):
+                 first_line = content.split('\n')[0]
+                 title = first_line.replace("#", "").strip()
+                 # Clean title for filename
+                 title = "".join([c for c in title if c.isalnum() or c in (' ', '-', '_')]).strip()
+                 title = title.replace(' ', '_')
+
+            with open(os.path.join(md_dir, f"{i:03d}_{title}.md"), 'w', encoding='utf-8') as f:
+                f.write(content)
+
+        # Concatenate markdown
+        full_markdown = "\n\n".join(self.content_list)
+
+        # Save full markdown
+        md_fname = os.path.join(output_dir, self.fname.replace('.pdf', '.md'))
+        with open(md_fname, 'w', encoding='utf-8') as f:
+            f.write(full_markdown)
+
+        # Convert markdown back to HTML
+        # We need extensions to support tables, code blocks, etc.
+        html_body_content = markdown.markdown(full_markdown, extensions=['extra', 'codehilite', 'toc'])
+
+        # Wrap in markdown-section div to ensure gitbook.css styles are applied
+        html_body = f'<div class="markdown-section">{html_body_content}</div>'
+
+        # Wrap in HTML structure
         html_g = HtmlGenerator(self.base_url)
-        html_g.add_body(body)
+        html_g.add_body(html_body)
         for key, value in self.meta_list:
             html_g.add_meta_data(key, value)
         html_text = html_g.output()
@@ -331,9 +399,8 @@ class Gitbook2PDF():
 
     async def getext_fake(self, index, title, level):
         await asyncio.sleep(0.01)
-        class_ = get_level_class(level)
-        string = f"<h1 class='{class_}'>{title}</h1>"
-        self.content_list[index] = string
+        # Return markdown header
+        self.content_list[index] = f"{'#' * min(level, 6)} {title}"
 
     async def gettext(self, session, semaphore, index, url, level, title):
         '''

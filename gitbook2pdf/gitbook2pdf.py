@@ -26,14 +26,20 @@ from weasyprint.urls import URLFetchingError
 # Configure logging for WeasyPrint
 logger = logging.getLogger('weasyprint')
 logger.addHandler(logging.StreamHandler())
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.ERROR)
 
 BASE_DIR = os.path.dirname(__file__)
+
+# Global session for image fetching to reuse connections and handle retries
+image_session = requests.Session()
+image_retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504, 429])
+image_session.mount('http://', HTTPAdapter(max_retries=image_retries))
+image_session.mount('https://', HTTPAdapter(max_retries=image_retries))
 
 def custom_url_fetcher(url, timeout=60, ssl_context=None):
     if url.startswith("http"):
         try:
-            response = requests.get(url, timeout=timeout, headers={
+            response = image_session.get(url, timeout=timeout, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9'
@@ -334,19 +340,27 @@ class Gitbook2PDF():
         description: 爬取url中的内容
         return path's html
         '''
+        metatext = None
         async with semaphore:
             print("crawling : ", url)
-            try:
-                async with session.get(url, headers=self.headers, timeout=10) as resp:
-                    metatext = await resp.text()
-            except Exception as e:
-                print("retrying : ", url)
+            max_retries = 5
+            for attempt in range(max_retries):
                 try:
-                    async with session.get(url, headers=self.headers, timeout=20) as resp:
-                        metatext = await resp.text()
+                    async with session.get(url, headers=self.headers, timeout=30) as resp:
+                        if resp.status == 200:
+                            metatext = await resp.text()
+                            break
+                        else:
+                            print(f"Warning: {url} returned status {resp.status}. Retrying ({attempt + 1}/{max_retries})...")
                 except Exception as e:
-                    print(f"failed to fetch {url}: {e}")
-                    return
+                    print(f"Error fetching {url}: {e}. Retrying ({attempt + 1}/{max_retries})...")
+
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
+            if metatext is None:
+                print(f"Failed to fetch {url} after {max_retries} attempts.")
+                return
 
         try:
             text = ChapterParser(url,metatext, title, level ).parser()
